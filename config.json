@@ -11,5 +11,15 @@
     "conntrack_percent": 30.0,
     "duration_sec": 3
   },
-  "alert_cooldown": 120
+  "alert_cooldown": 120,
+  "external_targets": [
+    {
+      "name": "Server Sample",
+      "host": "144.225.53.171",
+      "port": 7019,
+      "timeout": 3
+    }
+  ],
+  "external_check_interval": 30
 }
+
