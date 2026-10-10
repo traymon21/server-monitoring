@@ -461,11 +461,20 @@
             status.textContent = 'Mengirim...'; status.style.color = '#94a3b8';
             try {
                 const res = await fetch('/api/notify', {
-                    method: 'POST', headers: {'Content-Type':'application/json'},
+                    method: 'POST',
+                    headers: {'Content-Type':'application/json'},
+                    credentials: 'same-origin',
                     body: JSON.stringify({message: msg, embed: useEmbed, title: title})
                 });
-                const d = await res.json();
-                status.textContent = d.message;
+                const text = await res.text();
+                let d;
+                try { d = JSON.parse(text); } catch(_) {
+                    status.textContent = res.status === 401 ? 'Session habis, login ulang' : 'Server error (bukan JSON)';
+                    status.style.color = '#ef4444';
+                    if (res.status === 401) setTimeout(() => location.href = '/login', 1500);
+                    return;
+                }
+                status.textContent = d.message || (d.success ? 'Terkirim!' : 'Gagal');
                 status.style.color = d.success ? '#22c55e' : '#ef4444';
                 if (d.success) document.getElementById('notify-msg').value = '';
             } catch(e) { status.textContent = 'Error: '+e.message; status.style.color = '#ef4444'; }
@@ -497,8 +506,9 @@
         const _origFetch = fetchStats;
         fetchStats = async function() {
             try {
-                const res = await fetch('/api/stats');
-                if (!res.ok) { window.location.href = '/login'; return; }
+                const res = await fetch('/api/stats', { credentials: 'same-origin' });
+                if (res.status === 401) { window.location.href = '/login'; return; }
+                if (!res.ok) return;
                 const data = await res.json();
                 updateUI(data);
                 if (data.external) renderExternal(data.external);

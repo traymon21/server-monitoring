@@ -29,7 +29,11 @@ def load_config():
             "conntrack_percent": 30.0,
             "duration_sec": 3
         },
-        "alert_cooldown": 120
+        "alert_cooldown": 120,
+        "external_targets": [
+            {"name": "Server Sample", "host": "144.225.53.171", "port": 7019, "timeout": 3}
+        ],
+        "external_check_interval": 30
     }
     try:
         if os.path.exists(CONFIG_FILE):
@@ -50,10 +54,83 @@ THRESHOLDS = config["thresholds"]
 ALERT_COOLDOWN = config.get("alert_cooldown", 120)
 HOST = config.get("host", "0.0.0.0")
 PORT = config.get("port", 5000)
+EXTERNAL_TARGETS = config.get("external_targets", [])
+EXTERNAL_INTERVAL = config.get("external_check_interval", 30)
 
 app = Flask(__name__)
 app.secret_key = config.get("secret_key", "ganti-dengan-kunci-rahasia")
 # ==================================================
+
+# External monitor state
+ext_history = {}
+ext_status = {}
+ext_last_alert = {}
+EXT_LOG = os.path.join(os.path.dirname(__file__), "external_history.json")
+
+for t in EXTERNAL_TARGETS:
+    key = f"{t['host']}:{t['port']}"
+    ext_history[key] = deque(maxlen=300)
+    ext_status[key] = {"online": None, "latency": None, "last_check": None, "name": t.get("name", key), "host": t["host"], "port": t["port"]}
+    ext_last_alert[key] = 0
+
+def load_ext_history():
+    try:
+        if os.path.exists(EXT_LOG):
+            with open(EXT_LOG, "r") as f:
+                data = json.load(f)
+                for k, v in data.items():
+                    if k in ext_history:
+                        ext_history[k] = deque(v, maxlen=300)
+    except Exception:
+        pass
+
+def save_ext_history():
+    try:
+        with open(EXT_LOG, "w") as f:
+            json.dump({k: list(v) for k, v in ext_history.items()}, f)
+    except Exception:
+        pass
+
+load_ext_history()
+
+def check_port(host, port, timeout=3):
+    start = time.time()
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        result = sock.connect_ex((host, port))
+        sock.close()
+        latency = round((time.time() - start) * 1000, 1)
+        return (result == 0), (latency if result == 0 else None)
+    except Exception:
+        return False, None
+
+def external_checker_loop():
+    while True:
+        for t in EXTERNAL_TARGETS:
+            host, port = t["host"], t["port"]
+            key = f"{host}:{port}"
+            name = t.get("name", key)
+            online, latency = check_port(host, port, t.get("timeout", 3))
+            now = datetime.now().isoformat()
+            entry = {"time": now, "time_str": datetime.now().strftime("%H:%M:%S"), "online": online, "latency": latency}
+            if key in ext_history:
+                ext_history[key].append(entry)
+            prev = ext_status.get(key, {}).get("online")
+            ext_status[key] = {"online": online, "latency": latency, "last_check": now, "name": name, "host": host, "port": port}
+            # Alert on status change
+            if prev is True and online is False and (time.time() - ext_last_alert.get(key, 0) > ALERT_COOLDOWN):
+                send_discord(f"**🔴 Server Offline**\n**{name}**\n`{host}:{port}`\n{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+                ext_last_alert[key] = time.time()
+            elif prev is False and online is True and (time.time() - ext_last_alert.get(key, 0) > ALERT_COOLDOWN):
+                send_discord(f"**🟢 Server Online Kembali**\n**{name}**\n`{host}:{port}`\nLatency: {latency} ms\n{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+                ext_last_alert[key] = time.time()
+        save_ext_history()
+        time.sleep(EXTERNAL_INTERVAL)
+
+# Start external checker
+if EXTERNAL_TARGETS:
+    threading.Thread(target=external_checker_loop, daemon=True).start()
 
 # History untuk chart
 history = {
@@ -118,6 +195,9 @@ def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         if not session.get("logged_in"):
+            # API → JSON 401, bukan HTML redirect
+            if request.path.startswith("/api/"):
+                return jsonify({"success": False, "message": "Session habis, silakan login ulang"}), 401
             return redirect(url_for("login"))
         return f(*args, **kwargs)
     return decorated
@@ -537,6 +617,15 @@ def api_stats():
         "detection_active": detection_start is not None,
         "thresholds": THRESHOLDS,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "external": [
+            {
+                **ext_status.get(k, {}),
+                "key": k,
+                "history": list(ext_history.get(k, []))[-40:],
+                "uptime_percent": round(sum(1 for h in ext_history.get(k, []) if h.get("online")) / max(len(ext_history.get(k, [])), 1) * 100, 1) if ext_history.get(k) else None
+            }
+            for k in ext_status
+        ],
     })
 
 
@@ -575,6 +664,33 @@ def test_webhook():
         return jsonify({"success": False, "message": "Webhook belum di-set"}), 400
     ok = send_discord("**Test notifikasi** dari Server Monitor Dashboard\nWebhook berhasil terhubung!")
     return jsonify({"success": ok, "message": "Terkirim!" if ok else "Gagal kirim"})
+
+
+@app.route("/api/notify", methods=["POST"])
+@login_required
+def notify_discord():
+    data = request.json or {}
+    message = (data.get("message") or "").strip()
+    use_embed = data.get("embed", False)
+    title = (data.get("title") or "Notifikasi").strip()
+    if not message:
+        return jsonify({"success": False, "message": "Pesan kosong"}), 400
+    if not DISCORD_WEBHOOK:
+        return jsonify({"success": False, "message": "Webhook belum di-set"}), 400
+    try:
+        if use_embed:
+            payload = {"embeds": [{"title": title, "description": message, "color": 3447003,
+                                   "timestamp": datetime.utcnow().isoformat(), "footer": {"text": "Full Monitor"}}]}
+        else:
+            payload = {"content": message}
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(DISCORD_WEBHOOK, data=body,
+                                     headers={"Content-Type": "application/json", "User-Agent": "FullMonitor/1.0"}, method="POST")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            ok = resp.status in (200, 204)
+        return jsonify({"success": ok, "message": "Terkirim!" if ok else "Gagal"})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
 
 
 @app.route("/api/process/<int:pid>/kill", methods=["POST"])
