@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Server Monitor + DDoS Detection</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            --bg: #0f172a; --card: #1e293b; --border: #334155;
+            --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
+            --green: #22c55e; --yellow: #eab308; --red: #ef4444; --orange: #f97316; --purple: #a78bfa;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+        .header {
+            background: var(--card); border-bottom: 1px solid var(--border);
+            padding: 0.9rem 1.4rem; display: flex; justify-content: space-between; align-items: center;
+            position: sticky; top: 0; z-index: 100;
+        }
+        .header h1 { font-size: 1.2rem; color: var(--accent); display: flex; align-items: center; gap: 0.5rem; }
+        .header-right { display: flex; align-items: center; gap: 1rem; font-size: 0.85rem; color: var(--muted); }
+        .status-dot { width: 8px; height: 8px; background: var(--green); border-radius: 50%; display: inline-block; animation: pulse 2s infinite; }
+        .status-dot.alert { background: var(--red); }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+        .btn { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 0.35rem 0.75rem; border-radius: 6px; cursor: pointer; font-size: 0.8rem; text-decoration: none; transition: .2s; }
+        .btn:hover { border-color: var(--accent); color: var(--accent); }
+        .btn-primary { background: #0ea5e9; border-color: #0ea5e9; color: white; }
+        .btn-primary:hover { background: #0284c7; }
+        .container { max-width: 1440px; margin: 0 auto; padding: 1.1rem; }
+        .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.9rem; margin-bottom: 1.1rem; }
+        .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.1rem; }
+        .card-title { font-size: 0.7rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 0.4rem; }
+        .card-value { font-size: 1.55rem; font-weight: 700; }
+        .card-sub { font-size: 0.78rem; color: var(--muted); margin-top: 0.15rem; }
+        .progress { height: 5px; background: #334155; border-radius: 3px; margin-top: 0.6rem; overflow: hidden; }
+        .progress-bar { height: 100%; border-radius: 3px; transition: width .4s; }
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.1rem; margin-bottom: 1.1rem; }
+        @media (max-width: 960px) { .grid-2 { grid-template-columns: 1fr; } }
+        .section { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.1rem; margin-bottom: 1.1rem; }
+        .section-title { font-size: 0.95rem; font-weight: 600; margin-bottom: 0.9rem; display: flex; align-items: center; gap: 0.45rem; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+        th, td { padding: 0.5rem 0.65rem; text-align: left; border-bottom: 1px solid var(--border); }
+        th { color: var(--muted); font-weight: 500; font-size: 0.72rem; text-transform: uppercase; }
+        .badge { display: inline-block; padding: 0.12rem 0.45rem; border-radius: 999px; font-size: 0.68rem; font-weight: 600; }
+        .badge-yellow { background: rgba(234,179,8,.2); color: var(--yellow); }
+        .chart-wrap { position: relative; height: 210px; }
+        .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.65rem; }
+        .info-item { background: #0f172a; padding: 0.65rem; border-radius: 8px; border: 1px solid var(--border); }
+        .info-label { font-size: 0.68rem; color: var(--muted); }
+        .info-value { font-size: 0.88rem; font-weight: 500; }
+        .alert-box { background: rgba(239,68,68,.15); border: 1px solid var(--red); color: #fecaca; padding: 0.7rem 1rem; border-radius: 8px; margin-bottom: 1rem; display: none; font-size: 0.9rem; }
+        .alert-box.show { display: block; }
+        .peak-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.7rem; }
+        .peak-item { background: #0f172a; border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem; text-align: center; }
+        .peak-val { font-size: 1.3rem; font-weight: 700; color: var(--accent); }
+        .peak-label { font-size: 0.72rem; color: var(--muted); margin-top: 0.2rem; }
+        .log-entry { background: #0f172a; border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem; margin-bottom: 0.6rem; font-size: 0.82rem; }
+        .log-entry.attack { border-left: 3px solid var(--red); }
+        .log-entry.normal { border-left: 3px solid var(--green); }
+        .log-time { color: var(--muted); font-size: 0.75rem; }
+        .settings-row { display: flex; gap: 0.8rem; flex-wrap: wrap; align-items: end; margin-bottom: 0.8rem; }
+        .settings-row label { font-size: 0.78rem; color: var(--muted); display: block; margin-bottom: 0.25rem; }
+        .settings-row input { background: #0f172a; border: 1px solid var(--border); color: var(--text); padding: 0.45rem 0.6rem; border-radius: 6px; width: 120px; }
+        .settings-row input[type="text"] { width: 320px; max-width: 100%; }
+        .tabs { display: flex; gap: 0.4rem; margin-bottom: 1rem; flex-wrap: wrap; }
+        .tab { padding: 0.4rem 0.9rem; border-radius: 6px; cursor: pointer; font-size: 0.82rem; border: 1px solid var(--border); color: var(--muted); }
+        .tab.active { background: #0ea5e9; border-color: #0ea5e9; color: white; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .btn-kill { background: transparent; border: 1px solid var(--red); color: var(--red); padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.68rem; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🖥️ Server Monitor + DDoS Guard</h1>
+        <div class="header-right">
+            <span><span class="status-dot" id="status-dot"></span> <span id="status-text">Live</span></span>
+            <span id="last-update">-</span>
+            <a href="/logout" class="btn">Keluar</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <div id="alert-box" class="alert-box"></div>
+
+        <div class="cards">
+            <div class="card">
+                <div class="card-title">CPU</div>
+                <div class="card-value" id="cpu-percent">-</div>
+                <div class="card-sub" id="cpu-detail">-</div>
+                <div class="progress"><div class="progress-bar" id="cpu-bar"></div></div>
+            </div>
+            <div class="card">
+                <div class="card-title">Memory</div>
+                <div class="card-value" id="ram-percent">-</div>
+                <div class="card-sub" id="ram-detail">-</div>
+                <div class="progress"><div class="progress-bar" id="ram-bar"></div></div>
+            </div>
+            <div class="card">
+                <div class="card-title">Network RX</div>
+                <div class="card-value" id="rx-mbps" style="font-size:1.3rem">-</div>
+                <div class="card-sub" id="rx-detail">-</div>
+            </div>
+            <div class="card">
+                <div class="card-title">PPS / SYN</div>
+                <div class="card-value" id="pps-syn" style="font-size:1.15rem">-</div>
+                <div class="card-sub" id="conntrack">-</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Uptime</div>
+                <div class="card-value" id="uptime" style="font-size:1.05rem">-</div>
+                <div class="card-sub" id="hostname">-</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Load Avg</div>
+                <div class="card-value" id="load-avg" style="font-size:1.15rem">-</div>
+                <div class="card-sub">1 / 5 / 15 m</div>
+            </div>
+        </div>
+
+        <div class="tabs">
+            <div class="tab active" data-tab="overview">Overview</div>
+            <div class="tab" data-tab="ddos">DDoS Log & Peak</div>
+            <div class="tab" data-tab="settings">Settings & Webhook</div>
+            <div class="tab" data-tab="processes">Processes</div>
+        </div>
+
+        <div class="tab-content active" id="tab-overview">
+            <div class="grid-2">
+                <div class="section">
+                    <div class="section-title">📈 CPU & RAM History</div>
+                    <div class="chart-wrap"><canvas id="chartCpuRam"></canvas></div>
+                </div>
+                <div class="section">
+                    <div class="section-title">📡 Network (Mbps) & PPS</div>
+                    <div class="chart-wrap"><canvas id="chartNet"></canvas></div>
+                </div>
+            </div>
+            <div class="grid-2">
+                <div class="section">
+                    <div class="section-title">ℹ️ Sistem</div>
+                    <div class="info-grid" id="sys-info"></div>
+                </div>
+                <div class="section">
+                    <div class="section-title">💾 Disk</div>
+                    <div id="disks-list"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="tab-ddos">
+            <div class="section">
+                <div class="section-title">🏆 Peak Values (Tertinggi)</div>
+                <div class="peak-grid" id="peaks"></div>
+            </div>
+            <div class="section">
+                <div class="section-title">🚨 DDoS Detection Log</div>
+                <div id="ddos-logs"><p style="color:var(--muted)">Belum ada log deteksi.</p></div>
+            </div>
+        </div>
+
+        <div class="tab-content" id="tab-settings">
+            <div class="section">
+                <div class="section-title">⚙️ Threshold Deteksi & Discord Webhook</div>
+                <div class="settings-row">
+                    <div>
+                        <label>RX Mbps Threshold</label>
+                        <input type="number" id="th-rx" value="150" step="10">
+                    </div>
+                    <div>
+                        <label>PPS Threshold</label>
+                        <input type="number" id="th-pps" value="5000" step="500">
+                    </div>
+                    <div>
+                        <label>SYN_RECV</label>
+                        <input type="number" id="th-syn" value="50" step="10">
+                    </div>
+                    <div>
+                        <label>Conntrack %</label>
+                        <input type="number" id="th-ct" value="30" step="5">
+                    </div>
+                    <div>
+                        <label>Durasi min (detik)</label>
+                        <input type="number" id="th-dur" value="3" step="1">
+                    </div>
+                </div>
+                <div class="settings-row">
+                    <div style="flex:1">
+                        <label>Discord Webhook URL</label>
+                        <input type="text" id="webhook-url" placeholder="https://discord.com/api/webhooks/...">
+                    </div>
+                </div>
+                <div style="display:flex; gap:0.6rem; margin-top:0.5rem;">
+                    <button class="btn btn-primary" onclick="saveSettings()">Simpan Settings</button>
+                    <button class="btn" onclick="testWebhook()">Test Webhook</button>
+                </div>
+                <p style="margin-top:0.8rem; font-size:0.8rem; color:var(--muted);">
+                    Status webhook: <strong id="webhook-status">Cek di Settings</strong>
+                </p>
+            </div>
+        </div>
+
+        <div class="tab-content" id="tab-processes">
+            <div class="section">
+                <div class="section-title">⚙️ Top Processes</div>
+                <div style="overflow-x:auto">
+                    <table>
+                        <thead>
+                            <tr><th>PID</th><th>Nama</th><th>User</th><th>CPU %</th><th>RAM %</th><th>Status</th><th>Aksi</th></tr>
+                        </thead>
+                        <tbody id="processes"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.querySelectorAll('.tab').forEach(t => {
+            t.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(x => x.classList.remove('active'));
+                t.classList.add('active');
+                document.getElementById('tab-' + t.dataset.tab).classList.add('active');
+            });
+        });
+
+        const chartCpuRam = new Chart(document.getElementById('chartCpuRam'), {
+            type: 'line',
+            data: { labels: [], datasets: [
+                { label: 'CPU %', data: [], borderColor: '#38bdf8', backgroundColor: 'rgba(56,189,248,.1)', fill: true, tension: .3, pointRadius: 0 },
+                { label: 'RAM %', data: [], borderColor: '#a78bfa', backgroundColor: 'rgba(167,139,250,.1)', fill: true, tension: .3, pointRadius: 0 }
+            ]},
+            options: { responsive: true, maintainAspectRatio: false, animation: false,
+                scales: { y: { min: 0, max: 100, grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+                          x: { grid: { display: false }, ticks: { color: '#94a3b8', maxTicksLimit: 8 } } },
+                plugins: { legend: { labels: { color: '#e2e8f0' } } }
+            }
+        });
+
+        const chartNet = new Chart(document.getElementById('chartNet'), {
+            type: 'line',
+            data: { labels: [], datasets: [
+                { label: 'RX Mbps', data: [], borderColor: '#22c55e', backgroundColor: 'rgba(34,197,94,.1)', fill: true, tension: .3, pointRadius: 0 },
+                { label: 'TX Mbps', data: [], borderColor: '#f97316', backgroundColor: 'rgba(249,115,22,.1)', fill: true, tension: .3, pointRadius: 0 },
+                { label: 'PPS / 100', data: [], borderColor: '#ef4444', borderDash: [4,4], tension: .3, pointRadius: 0, yAxisID: 'y1' }
+            ]},
+            options: { responsive: true, maintainAspectRatio: false, animation: false,
+                scales: {
+                    y: { min: 0, grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+                    y1: { position: 'right', min: 0, grid: { display: false }, ticks: { color: '#ef4444' } },
+                    x: { grid: { display: false }, ticks: { color: '#94a3b8', maxTicksLimit: 8 } }
+                },
+                plugins: { legend: { labels: { color: '#e2e8f0' } } }
+            }
+        });
+
+        function colorBy(p) {
+            if (p >= 90) return 'var(--red)';
+            if (p >= 70) return 'var(--orange)';
+            if (p >= 50) return 'var(--yellow)';
+            return 'var(--green)';
+        }
+
+        function updateUI(d) {
+            document.getElementById('cpu-percent').textContent = d.cpu.percent.toFixed(1) + '%';
+            document.getElementById('cpu-detail').textContent = d.cpu.count_physical + 'c / ' + d.cpu.count_logical + 't • ' + d.cpu.freq_current + ' MHz';
+            document.getElementById('cpu-bar').style.width = d.cpu.percent + '%';
+            document.getElementById('cpu-bar').style.background = colorBy(d.cpu.percent);
+
+            document.getElementById('ram-percent').textContent = d.memory.percent.toFixed(1) + '%';
+            document.getElementById('ram-detail').textContent = d.memory.used_human + ' / ' + d.memory.total_human;
+            document.getElementById('ram-bar').style.width = d.memory.percent + '%';
+            document.getElementById('ram-bar').style.background = colorBy(d.memory.percent);
+
+            document.getElementById('rx-mbps').textContent = d.network.recv_mbps.toFixed(1) + ' Mbps';
+            document.getElementById('rx-detail').textContent = 'TX ' + d.network.sent_mbps.toFixed(1) + ' Mbps • Total ↓' + d.network.bytes_recv_human;
+
+            document.getElementById('pps-syn').textContent = d.network.pps + ' pps / SYN ' + d.syn_recv;
+            document.getElementById('conntrack').textContent = 'Conntrack ' + d.conntrack.count + '/' + d.conntrack.max + ' (' + d.conntrack.percent + '%)';
+
+            document.getElementById('uptime').textContent = d.system.uptime;
+            document.getElementById('hostname').textContent = d.system.hostname;
+            document.getElementById('load-avg').textContent = d.cpu.load_avg.join(' / ');
+            document.getElementById('last-update').textContent = d.timestamp;
+
+            const alertBox = document.getElementById('alert-box');
+            const statusDot = document.getElementById('status-dot');
+            const statusText = document.getElementById('status-text');
+            if (d.detection_active) {
+                alertBox.classList.add('show');
+                alertBox.textContent = '🚨 DUGAAN SERANGAN DDoS TERDETEKSI! Notifikasi sudah dikirim ke Discord (jika webhook aktif).';
+                statusDot.classList.add('alert');
+                statusText.textContent = 'UNDER ATTACK';
+            } else {
+                alertBox.classList.remove('show');
+                statusDot.classList.remove('alert');
+                statusText.textContent = 'Live';
+            }
+
+            document.getElementById('sys-info').innerHTML = `
+                <div class="info-item"><div class="info-label">Hostname</div><div class="info-value">${d.system.hostname}</div></div>
+                <div class="info-item"><div class="info-label">OS</div><div class="info-value">${d.system.os}</div></div>
+                <div class="info-item"><div class="info-label">Arch</div><div class="info-value">${d.system.architecture}</div></div>
+                <div class="info-item"><div class="info-label">Boot</div><div class="info-value">${d.system.boot_time}</div></div>
+                <div class="info-item"><div class="info-label">Swap</div><div class="info-value">${d.memory.swap_used_human} / ${d.memory.swap_total_human}</div></div>
+            `;
+
+            let diskH = '';
+            d.disks.forEach(x => {
+                diskH += `<div style="margin-bottom:0.7rem">
+                    <div style="display:flex;justify-content:space-between;font-size:0.82rem;margin-bottom:0.25rem">
+                        <span><b>${x.mountpoint}</b> <span style="color:var(--muted)">(${x.device})</span></span>
+                        <span>${x.percent}% • ${x.used_human}/${x.total_human}</span>
+                    </div>
+                    <div class="progress"><div class="progress-bar" style="width:${x.percent}%;background:${colorBy(x.percent)}"></div></div>
+                </div>`;
+            });
+            document.getElementById('disks-list').innerHTML = diskH || '<p style="color:var(--muted)">-</p>';
+
+            const p = d.peaks;
+            document.getElementById('peaks').innerHTML = `
+                <div class="peak-item"><div class="peak-val">${p.cpu}%</div><div class="peak-label">CPU Tertinggi</div></div>
+                <div class="peak-item"><div class="peak-val">${p.ram}%</div><div class="peak-label">RAM Tertinggi</div></div>
+                <div class="peak-item"><div class="peak-val">${p.rx_mbps} Mbps</div><div class="peak-label">RX Peak</div></div>
+                <div class="peak-item"><div class="peak-val">${p.tx_mbps} Mbps</div><div class="peak-label">TX Peak</div></div>
+                <div class="peak-item"><div class="peak-val">${p.pps}</div><div class="peak-label">PPS Peak</div></div>
+            `;
+
+            let logH = '';
+            if (d.ddos_logs && d.ddos_logs.length) {
+                d.ddos_logs.forEach(l => {
+                    const isAttack = l.type === 'attack_detected';
+                    const data = l.data || {};
+                    logH += `<div class="log-entry ${isAttack ? 'attack' : 'normal'}">
+                        <div class="log-time">${new Date(l.time).toLocaleString('id-ID')} • ${isAttack ? '🚨 ATTACK DETECTED' : '✅ TRAFFIC NORMAL'}</div>
+                        <div style="margin-top:0.35rem">
+                            ${isAttack
+                                ? `RX <b>${data.rx_mbps} Mbps</b> / ${data.pps} pps • SYN ${data.syn_recv} • CT ${data.conntrack_pct}% • Durasi ${data.duration}s`
+                                : `Peak: <b>${data.peak_rx} Mbps</b> / ${data.peak_pps} pps • SYN ${data.peak_syn}`}
+                        </div>
+                    </div>`;
+                });
+            } else {
+                logH = '<p style="color:var(--muted)">Belum ada log deteksi. Log akan muncul otomatis saat threshold terlewati.</p>';
+            }
+            document.getElementById('ddos-logs').innerHTML = logH;
+
+            let procH = '';
+            d.processes.forEach(p => {
+                procH += `<tr>
+                    <td>${p.pid}</td><td>${p.name}</td><td>${p.username}</td>
+                    <td>${p.cpu}</td><td>${p.memory}</td>
+                    <td><span class="badge badge-yellow">${p.status}</span></td>
+                    <td><button class="btn-kill" onclick="killProc(${p.pid},'${p.name.replace(/'/g,"\\'")}')">Kill</button></td>
+                </tr>`;
+            });
+            document.getElementById('processes').innerHTML = procH;
+
+            chartCpuRam.data.labels = d.history.timestamps;
+            chartCpuRam.data.datasets[0].data = d.history.cpu;
+            chartCpuRam.data.datasets[1].data = d.history.ram;
+            chartCpuRam.update();
+
+            chartNet.data.labels = d.history.timestamps;
+            chartNet.data.datasets[0].data = d.history.net_recv;
+            chartNet.data.datasets[1].data = d.history.net_sent;
+            chartNet.data.datasets[2].data = d.history.pps.map(x => x / 100);
+            chartNet.update();
+
+            if (d.thresholds) {
+                document.getElementById('th-rx').value = d.thresholds.rx_mbps;
+                document.getElementById('th-pps').value = d.thresholds.pps;
+                document.getElementById('th-syn').value = d.thresholds.syn_recv;
+                document.getElementById('th-ct').value = d.thresholds.conntrack_percent;
+                document.getElementById('th-dur').value = d.thresholds.duration_sec;
+            }
+        }
+
+        async function fetchStats() {
+            try {
+                const res = await fetch('/api/stats');
+                if (!res.ok) { window.location.href = '/login'; return; }
+                const data = await res.json();
+                updateUI(data);
+            } catch (e) { console.error(e); }
+        }
+
+        async function saveSettings() {
+            const body = {
+                thresholds: {
+                    rx_mbps: parseFloat(document.getElementById('th-rx').value),
+                    pps: parseInt(document.getElementById('th-pps').value),
+                    syn_recv: parseInt(document.getElementById('th-syn').value),
+                    conntrack_percent: parseFloat(document.getElementById('th-ct').value),
+                    duration_sec: parseInt(document.getElementById('th-dur').value),
+                },
+                webhook: document.getElementById('webhook-url').value.trim()
+            };
+            const res = await fetch('/api/settings', {
+                method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+            });
+            const d = await res.json();
+            if (d.success) {
+                alert('Settings tersimpan!');
+                document.getElementById('webhook-status').textContent = body.webhook ? 'Sudah di-set' : 'Belum di-set';
+            }
+        }
+
+        async function testWebhook() {
+            const res = await fetch('/api/test-webhook', { method: 'POST' });
+            const d = await res.json();
+            alert(d.message);
+        }
+
+        async function killProc(pid, name) {
+            if (!confirm('Hentikan proses "' + name + '" (PID ' + pid + ')?')) return;
+            const res = await fetch('/api/process/' + pid + '/kill', { method: 'POST' });
+            const d = await res.json();
+            alert(d.message);
+            fetchStats();
+        }
+
+        fetchStats();
+        setInterval(fetchStats, 2500);
+    </script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "password": "admin123",
+  "secret_key": "loggeresrp",
+  "discord_webhook": "https://discord.com/api/webhooks/1558421178140467320/xlDS6JJGS73Bsy2n9vGcHZ3lFHqgdijL5ND7hDjNr4zTV_VAsgja8YWGLi93EqZbUTSZ",
+  "host": "144.225.53.171",
+  "port": 7019,
+  "thresholds": {
+    "rx_mbps": 150.0,
+    "pps": 5000,
+    "syn_recv": 50,
+    "conntrack_percent": 30.0,
+    "duration_sec": 3
+  },
+  "alert_cooldown": 120
+}
