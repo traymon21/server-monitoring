@@ -14,7 +14,7 @@
   "alert_cooldown": 120,
   "external_targets": [
     {
-      "name": "Server Sample",
+      "name": "East Side RP | Client P",
       "host": "144.225.53.171",
       "port": 7019,
       "timeout": 3
